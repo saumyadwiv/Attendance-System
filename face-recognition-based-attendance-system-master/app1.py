@@ -1,5 +1,5 @@
 import cv2
-import os
+import os   
 from flask import Flask, render_template, request, redirect, url_for, session
 from datetime import date
 from datetime import datetime
@@ -19,9 +19,13 @@ datetoday = date.today().strftime("%m_%d_%y")
 datetoday2 = date.today().strftime("%d-%B-%Y")
 
 
-# Initializing VideoCapture object to access WebCam
-face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
- 
+# Initialize Haarcascade
+face_detector_path = r'C:\Users\lenovo\Desktop\face_recog\face-recognition-based-attendance-system-master\haarcascade_frontalface_default.xml'
+face_detector = cv2.CascadeClassifier(face_detector_path)
+if not os.path.exists(face_detector_path):
+    raise FileNotFoundError(f"{face_detector_path} not found. Please add it to the project directory.")
+face_detector = cv2.CascadeClassifier(face_detector_path)
+
 
 # If these directories don't exist, create them
 if not os.path.isdir('Attendance'):
@@ -75,16 +79,36 @@ def train_model(username):
 
 # Extract info from today's attendance file in attendance folder
 def extract_attendance(user):
+    attendance_file = f'Attendance/{user}/Attendance-{datetoday}.csv'
+
+    # Ensure the attendance file exists with proper headers
+    if not os.path.exists(attendance_file):
+        # Create the file if it doesn't exist, and add the correct headers
+        with open(attendance_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Name', 'Roll', 'Time'])  # Ensure correct headers
+
+    # Read the attendance file
+    df = pd.read_csv(attendance_file)
+
+    # Check if required columns are present
+    required_columns = ['Name', 'Roll', 'Time']
+    for col in required_columns:
+        if col not in df.columns:
+            # If any column is missing, recreate the file with correct headers
+            with open(attendance_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(required_columns)  # Write the correct headers
+            df = pd.read_csv(attendance_file)  # Read the freshly created file
+            print(f"Warning: Missing column '{col}', file has been fixed.")  # Optional: log the fix
     
-    if f'Attendance-{datetoday}.csv' not in os.listdir(f'Attendance/{user}'):
-        with open(f'Attendance/{user}/Attendance-{datetoday}.csv', 'w') as f:
-            f.write('Name,Roll,Time\n')
-    df = pd.read_csv(f'Attendance/{user}/Attendance-{datetoday}.csv')
     names = df['Name']
     rolls = df['Roll']
     times = df['Time']
     l = len(df)
+    
     return names, rolls, times, l
+
 
 
 # Add Attendance of a specific user
@@ -100,7 +124,7 @@ def add_attendance(name, user):
         # Check if the user ID is already present in the file
         if int(userid) not in list(df['Roll']):
             # Append the new attendance record
-            with open(attendance_file, 'a', newline='\n') as f:
+            with open(attendance_file, 'a', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow([username, userid, current_time])
     else:
@@ -114,7 +138,7 @@ def add_attendance(name, user):
 
 ## A function to get names and rol numbers of all users
 def getallusers(user):
-    userlist = os.listdir(f'static/{user}') 
+    userlist = os.listdir('static/{user}')
     names = []
     rolls = []
     l = len(userlist)
@@ -160,6 +184,7 @@ def login():
         return render_template('login.html', error="Invalid username or password!")
 
     return render_template('login.html')
+
 
 # @app.route('/register', methods=['GET', 'POST'])
 # def register():
@@ -277,15 +302,15 @@ def deleteuser():
 # This function will run when we click on Take Attendance Button.
 @app.route('/start', methods=['GET'])
 def start():
-    user = session.get('username')
+    user = session.get('username')  # Get the currently logged-in username
     attendance_file = f'Attendance/{user}/Attendance-{datetoday}.csv'
     
     # Ensure the attendance file exists with proper headers
     if not os.path.exists(attendance_file):
-        os.makedirs(f'Attendance/{user}', exist_ok=True)
+        os.makedirs(f'Attendance/{user}', exist_ok=True)  # Create directory if it doesn't exist
         with open(attendance_file, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['Name', 'Roll', 'Time'])
+            writer.writerow(['Name', 'Roll', 'Time'])  # Write headers for the CSV file
     
     try:
         # Load attendance data and handle missing columns
@@ -298,7 +323,7 @@ def start():
         times = df['Time'].tolist()
         l = len(df)
     except Exception as e:
-        # If file is corrupted or missing, reset it
+        # If file is corrupted or missing, reset the data
         names, rolls, times, l = [], [], [], 0
     
     # Check if face recognition model exists
@@ -311,7 +336,7 @@ def start():
         )
     
     # Start capturing video for face recognition
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(0)  # Open the default camera
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -320,31 +345,31 @@ def start():
         # Detect and process faces
         faces = extract_faces(frame)
         if len(faces) > 0:
-            (x, y, w, h) = faces[0]
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (86, 32, 251), 1)
-            cv2.rectangle(frame, (x, y), (x+w, y-40), (86, 32, 251), -1)
+            (x, y, w, h) = faces[0]  # Use the first detected face
+            cv2.rectangle(frame, (x, y), (x+w, y+h), (86, 32, 251), 1)  # Draw a rectangle around the face
+            cv2.rectangle(frame, (x, y), (x+w, y-40), (86, 32, 251), -1)  # Add a filled rectangle for text
             
-            face = cv2.resize(frame[y:y+h, x:x+w], (50, 50))
-            identified_person = identify_face(face.reshape(1, -1))[0]
-            add_attendance(identified_person, user)
+            face = cv2.resize(frame[y:y+h, x:x+w], (50, 50))  # Resize the detected face
+            identified_person = identify_face(face.reshape(1, -1))[0]  # Predict the identity using the model
+            add_attendance(identified_person, user)  # Mark attendance
             
+            # Add text label for the identified person
             cv2.putText(frame, f'{identified_person}', (x+5, y-5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        
-        cv2.imshow('Attendance', frame)
-        if cv2.waitKey(1) & 0xFF == 27:  # Press 'Esc' to exit
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
+        # Display the video feed
+        cv2.imshow('Attendance System', frame)
+
+        # Break the loop on pressing 'q'
+        if cv2.waitKey(1) & 0xFF == 27:
             break
-    
-    cap.release()
-    cv2.destroyAllWindows()
-    
-    # Reload updated attendance data
-    names, rolls, times, l = extract_attendance(user)
-    return render_template(
-        'home.html', 
-        names=names, rolls=rolls, times=times, l=l, 
-        totalreg=totalreg(user), datetoday2=datetoday2
-    )
+
+    cap.release()  # Release the video capture object
+    cv2.destroyAllWindows()  # Close all OpenCV windows
+    username=session.get('username')
+    names, rolls, times, l = extract_attendance(username)
+    return render_template('home.html', names=names, rolls=rolls, times=times, l=l, totalreg=totalreg(username), datetoday2=datetoday2)  # Redirect to the home page
+
 
 
 # A function to add a new user.
@@ -386,5 +411,5 @@ def add():
 
 
 # Our main function which runs the Flask App
-if __name__== 'main_':
+if __name__ == "__main__":
     app.run(debug=True)

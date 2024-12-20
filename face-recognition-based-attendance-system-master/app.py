@@ -8,11 +8,15 @@ from sklearn.neighbors import KNeighborsClassifier
 import pandas as pd
 import csv
 import joblib
+import random
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # Defining Flask App
 app = Flask(__name__)
 app.secret_key = "a6f9b1a3c9d4e8g2h7j0k3p1q2r4t5"
-nimgs = 10
+nimgs = 50
 
 # Saving Date today in 2 different formats
 datetoday = date.today().strftime("%m_%d_%y")
@@ -114,7 +118,7 @@ def extract_attendance(user):
 # Add Attendance of a specific user
 def add_attendance(name, user):
     username = name.split('_')[0]
-    userid = name.split('_')[1]
+    userid = name.split('_')[1]  # Keep as a string
     current_time = datetime.now().strftime("%H:%M:%S")
     attendance_file = f'Attendance/{user}/Attendance-{datetoday}.csv'
 
@@ -122,7 +126,7 @@ def add_attendance(name, user):
     if os.path.exists(attendance_file):
         df = pd.read_csv(attendance_file)
         # Check if the user ID is already present in the file
-        if int(userid) not in list(df['Roll']):
+        if userid not in list(df['Roll']):  # Compare as a string
             # Append the new attendance record
             with open(attendance_file, 'a', newline='') as f:
                 writer = csv.writer(f)
@@ -135,20 +139,20 @@ def add_attendance(name, user):
             writer.writerow([username, userid, current_time])
 
 
-
 ## A function to get names and rol numbers of all users
 def getallusers(user):
-    userlist = os.listdir('static/{user}')
+    userlist = os.listdir(f'static/{user}')
     names = []
     rolls = []
     l = len(userlist)
 
     for i in userlist:
-        name, roll = i.split('_')
+        name, roll = i.split('_')  # Split and keep `roll` as a string
         names.append(name)
         rolls.append(roll)
 
     return userlist, names, rolls, l
+
 
 
 ## A function to delete a user folder 
@@ -157,34 +161,90 @@ def deletefolder(duser):
     for i in pics:
         os.remove(duser+'/'+i)
     os.rmdir(duser)
+def generate_otp():
+    otp = ''.join([str(random.randint(0, 9)) for _ in range(6)])  # 6-digit OTP
+    return otp
 
 
+###### OTP #######
+# Function to send OTP via email
+def send_email(otp, recipient_email):
+    sender_email = "saumyadwivedi1904@gmail.com"
+    sender_password = "xujxipmsnqjlmjll"  # You may need to create an app-specific password for Gmail.
 
+    # Create the email content
+    subject = "Your OTP Code"
+    body = f"Your OTP code is: {otp}"
+
+    # Set up the MIME
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        # Connect to Gmail's SMTP server
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(sender_email, sender_password)
+            text = msg.as_string()
+            server.sendmail(sender_email, recipient_email, text)
+        print("OTP sent successfully!")
+    except Exception as e:
+        print(f"Error sending email: {e}")
 
 ################## ROUTING FUNCTIONS #########################
 
 # Our main page
+app.secret_key = 'your_secret_key'  # Required for session management
+
 @app.route('/', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
+        print(request.form)  # Print the entire form data for debugging
+
+        username = request.form.get('username')  # Use .get() to avoid KeyError
+        password = request.form.get('password')
+
+        if not username or not password:
+            return render_template('login.html', error="Username or password is missing!")
 
         user_file = 'Users/users.csv'
 
         if os.path.exists(user_file):
             with open(user_file, mode='r') as f:
                 reader = csv.reader(f)
-                next(reader)
+                next(reader)  # Skip header row
                 for row in reader:
                     if row[0] == username and row[1] == password:
                         session['username'] = username
-                        return redirect(url_for('index'))
+                        otp = generate_otp()
+                        recipient_email = row[2]  # Assume email is in row[2]
+                        send_email(otp, recipient_email)
+                        
+                        # Store OTP in session for later comparison
+                        session['otp'] = otp
+                        return redirect(url_for('verify_otp'))  # Redirect to OTP verification page
 
         return render_template('login.html', error="Invalid username or password!")
-
+    
     return render_template('login.html')
 
+
+@app.route('/verify_otp', methods=['GET', 'POST'])
+def verify_otp():
+    if request.method == 'POST':
+        otp_entered = request.form['otp']  # Get OTP entered by user
+        
+        # Compare the entered OTP with the one stored in the session
+        if otp_entered == session.get('otp'):
+            # OTP matches, redirect to the home page
+            return redirect(url_for('index'))
+        else:
+            # Invalid OTP, show an error
+            return render_template('verify_otp.html', error="Invalid OTP! Please try again.")
+    
+    return render_template('verify_otp.html')
 
 # @app.route('/register', methods=['GET', 'POST'])
 # def register():
@@ -222,17 +282,22 @@ def login():
 
 @app.route('/home', methods=['GET', 'POST'])
 def home():
-    username=session.get('username')
-    user_folders = os.listdir(f'Attendance/{username}')  # List of user folders
+    # Get the username from the session
+    username = session.get('username')
+
+    # List all folders for the logged-in user
+    user_folders = os.listdir(f'Attendance/{username}')
     slots = {}
-    
+
     # Gather all available slots for each user
     for user in user_folders:
         user_path = os.path.join(f'Attendance/{username}', user)
         if os.path.isdir(user_path):
+            # Find all CSV files in the user's folder (each represents a slot)
             slots[user] = [file for file in os.listdir(user_path) if file.endswith('.csv')]
-    
+
     if request.method == 'POST':
+        # Get user and slot from the form as strings (default form input behavior)
         user = request.form.get('user')
         slot = request.form.get('slot')
         slot_file = os.path.join('Attendance', user, slot)
@@ -240,17 +305,19 @@ def home():
         # Take attendance for the selected slot
         if os.path.exists(slot_file):
             df = pd.read_csv(slot_file)
-            username = request.form.get('username')
             current_time = datetime.now().strftime("%H:%M:%S")
             if username not in df['Name'].values:
+                # Add a new entry for attendance
                 with open(slot_file, 'a', newline='') as f:
                     writer = csv.writer(f)
                     writer.writerow([username, current_time])
                 return render_template('home.html', message=f"Attendance taken for {username} in slot {slot}.", slots=slots)
 
+        # If slot is invalid or not found
         return render_template('home.html', error="Selected slot or user is invalid.", slots=slots)
 
     return render_template('home.html', slots=slots)
+
 
 @app.route('/index')
 def index():
@@ -407,7 +474,6 @@ def add():
     train_model(username)
     names, rolls, times, l = extract_attendance(username)
     return render_template('home.html', names=names, rolls=rolls, times=times, l=l, totalreg=totalreg(username), datetoday2=datetoday2)
-
 
 
 # Our main function which runs the Flask App
